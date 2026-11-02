@@ -1,0 +1,10 @@
+{
+  "id": "uninotes",
+  "name": "UniNotes",
+  "version": "0.1.0",
+  "minAppVersion": "1.5.0",
+  "description": "Sync study notes that an AI agent builds from your handwritten Goodnotes pages into your vault.",
+  "author": "exelenta",
+  "authorUrl": "https://github.com/exelenta",
+  "isDesktopOnly": false
+}

@@ -1,0 +1,41 @@
+# Push a tag equal to manifest.json "version" (e.g. 0.1.1, no "v") to build and publish a release.
+# BRAT and Obsidian install main.js + manifest.json from the release assets.
+name: Release
+
+on:
+  push:
+    tags: ["*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Check tag matches manifest version
+        run: |
+          tag="${GITHUB_REF#refs/tags/}"
+          version=$(node -p "require('./manifest.json').version")
+          if [ "$tag" != "$version" ]; then
+            echo "Tag $tag does not match manifest.json version $version" >&2
+            exit 1
+          fi
+
+      - name: Build
+        run: |
+          npm install
+          npm run build
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="${GITHUB_REF#refs/tags/}"
+          gh release create "$tag" --title "$tag" --notes "UniNotes $tag" main.js manifest.json
