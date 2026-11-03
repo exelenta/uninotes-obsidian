@@ -255,7 +255,10 @@ export class SyncEngine {
   private async trashLocal(rel: string, f: TFile) {
     delete this.h.data.shas[rel]; // first, so the delete event does not queue a server delete
     await this.h.save();
-    await this.h.app.fileManager.trashFile(f); // follows the user's trash setting: recoverable
+    // recoverable: the user's trash setting (Obsidian 1.6.6+), else the vault's .trash folder
+    const fm = this.h.app.fileManager as { trashFile?: (f: TFile) => Promise<void> };
+    if (typeof fm.trashFile === "function") await fm.trashFile(f);
+    else await this.h.app.vault.trash(f, false);
   }
 
   /** A crash during writeLocal left `pending`: keep the file if it is complete, else fetch it again. */
