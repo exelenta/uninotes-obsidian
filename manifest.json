@@ -1,0 +1,9 @@
+{
+  "id": "uninotes",
+  "name": "UniNotes",
+  "version": "0.1.0",
+  "minAppVersion": "1.5.0",
+  "description": "Goodnotes 필기를 AI 에이전트가 정리한 노트로 동기화합니다.",
+  "author": "JP Studios",
+  "isDesktopOnly": false
+}
