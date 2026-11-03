@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "node esbuild.config.mjs",
     "build": "tsc --noEmit && node esbuild.config.mjs production",
-    "gen:api": "node scripts/gen-api-types.mjs"
+    "gen:api": "node scripts/gen-api-types.mjs",
+    "test:e2e": "node test/run-e2e.mjs"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

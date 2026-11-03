@@ -55,7 +55,6 @@ export class SyncEngine {
   private running = false;
   private again = false;
   private pushTimer: number | null = null;
-  private writing = new Set<string>();
 
   constructor(private h: SyncHost) {}
 
@@ -86,14 +85,26 @@ export class SyncEngine {
   // ---- vault events (registered by main.ts after layout ready) ----
 
   onModify(f: TAbstractFile) {
-    if (!(f instanceof TFile) || this.writing.has(f.path)) return;
+    if (!(f instanceof TFile)) return;
     const rel = this.rel(f.path);
     if (rel === null) return;
+    void this.checkDirty(rel, f);
+  }
+
+  /** The engine's own writes also fire modify/create: only a hash that differs from the base is an edit. */
+  private async checkDirty(rel: string, f: TFile) {
+    const base = this.h.data.shas[rel];
+    if (base !== undefined && this.h.data.pending[rel] === undefined) {
+      try {
+        if ((await this.hashOf(f)) === base) return;
+      } catch {
+        return; // gone already: the delete event handles it
+      }
+    }
     this.markDirty(rel);
   }
 
   onDelete(f: TAbstractFile) {
-    if (this.writing.has(f.path)) return;
     this.queueDelete(f.path, f instanceof TFolder);
   }
 
@@ -214,34 +225,37 @@ export class SyncEngine {
     }
   }
 
-  private async writeLocal(rel: string, data: ArrayBuffer, sha: string) {
+  /**
+   * Write a server version locally. `expect` = the local hash this write may replace (undefined: any,
+   * null: the file must not exist); if the user changed the file meanwhile, nothing is written.
+   */
+  private async writeLocal(rel: string, data: ArrayBuffer, sha: string, expect?: string | null): Promise<boolean> {
     const lp = this.local(rel);
+    let f = this.file(rel);
+    if (expect !== undefined && (f ? await this.hashOf(f) : null) !== expect) {
+      if (f) this.markDirty(rel); // edited during the download: the user's version goes up instead
+      return false;
+    }
     this.h.data.pending[rel] = sha;
     await this.h.save();
-    this.writing.add(lp);
-    try {
-      const f = this.file(rel);
-      if (f) await this.h.app.vault.modifyBinary(f, data);
-      else {
-        await this.ensureFolder(lp);
-        await this.h.app.vault.createBinary(lp, data);
-      }
-      this.h.data.shas[rel] = sha;
-      delete this.h.data.pending[rel];
-      this.h.data.dirty = this.h.data.dirty.filter((p) => p !== rel);
-      await this.h.save();
-    } finally {
-      window.setTimeout(() => this.writing.delete(lp), 2000); // vault events arrive asynchronously
+    f = this.file(rel);
+    if (f) await this.h.app.vault.modifyBinary(f, data);
+    else {
+      await this.ensureFolder(lp);
+      await this.h.app.vault.createBinary(lp, data);
     }
+    // the modify/create event that follows finds hash == base and uploads nothing
+    this.h.data.shas[rel] = sha;
+    delete this.h.data.pending[rel];
+    this.h.data.dirty = this.h.data.dirty.filter((p) => p !== rel);
+    await this.h.save();
+    return true;
   }
 
-  private async trashLocal(f: TFile) {
-    this.writing.add(f.path);
-    try {
-      await this.h.app.fileManager.trashFile(f); // follows the user's trash setting: recoverable
-    } finally {
-      window.setTimeout(() => this.writing.delete(f.path), 2000);
-    }
+  private async trashLocal(rel: string, f: TFile) {
+    delete this.h.data.shas[rel]; // first, so the delete event does not queue a server delete
+    await this.h.save();
+    await this.h.app.fileManager.trashFile(f); // follows the user's trash setting: recoverable
   }
 
   /** A crash during writeLocal left `pending`: keep the file if it is complete, else fetch it again. */
@@ -263,15 +277,16 @@ export class SyncEngine {
   /** Bring one path to the server's current version, unless the user edited it locally. */
   private async refresh(rel: string, expectLocal: string | null) {
     const f = this.file(rel);
-    if (f && expectLocal !== null && (await this.hashOf(f)) !== expectLocal) return; // edited meanwhile
+    const cur = f ? await this.hashOf(f) : null;
+    if (cur !== null && expectLocal !== null && cur !== expectLocal) return; // edited meanwhile
     const got = await this.h.api.download(rel);
     if (!got) {
-      if (f) await this.trashLocal(f);
+      if (f) await this.trashLocal(rel, f);
       delete this.h.data.shas[rel];
       await this.h.save();
       return;
     }
-    await this.writeLocal(rel, got.data, got.sha ?? (await sha256Hex(got.data)));
+    await this.writeLocal(rel, got.data, got.sha ?? (await sha256Hex(got.data)), cur);
   }
 
   // ---- push ----
@@ -368,7 +383,7 @@ export class SyncEngine {
         if (c.op === "delete") {
           if (f) {
             if (base !== undefined && (await this.hashOf(f)) === base) {
-              await this.trashLocal(f);
+              await this.trashLocal(rel, f);
               applied++;
             } else {
               this.markDirty(rel); // edited here: keep it and send it back (user wins, X12)
@@ -380,8 +395,10 @@ export class SyncEngine {
         }
         if (d.deletes[rel] !== undefined) continue; // deleted here, the push handles it
         if (c.sha256 && base === c.sha256) continue;
+        let expect: string | null = null;
         if (f) {
           const lsha = await this.hashOf(f);
+          expect = lsha;
           if (lsha === c.sha256) {
             d.shas[rel] = lsha;
             d.dirty = d.dirty.filter((p) => p !== rel);
@@ -396,12 +413,12 @@ export class SyncEngine {
             const ext = f.extension ? `.${f.extension}` : "";
             const copy = f.path.slice(0, f.path.length - ext.length) + ` (이 기기 사본 ${stamp()})` + ext;
             await this.h.app.fileManager.renameFile(f, copy);
+            expect = null;
           }
         }
         const got = await this.h.api.download(rel);
         if (!got) continue; // gone again; a later change says so
-        await this.writeLocal(rel, got.data, got.sha ?? (await sha256Hex(got.data)));
-        applied++;
+        if (await this.writeLocal(rel, got.data, got.sha ?? (await sha256Hex(got.data)), expect)) applied++;
       }
       d.cursor = page.cursor;
       await this.h.save();
