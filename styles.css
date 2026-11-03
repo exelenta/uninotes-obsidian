@@ -1,2 +1,79 @@
-/* UniNotes plugin styles. Shipped as a BRAT release asset (scripts/release-plugin.sh).
-   Callout icons/colors for [!source], [!question], [!ai] go here (session C). */
+/* UniNotes plugin styles. Shipped as a BRAT release asset (scripts/release-plugin.sh). */
+
+/* ---- note blocks (design 6장) -------------------------------------------------------------
+   > [!source]   handwriting reading       pen, blue
+   > [!question] scanned background        scan, amber
+   > [!ai|ai-90ab] agent writing           sparkles, purple
+   The block key after "|" is callout metadata (data-callout-metadata). */
+
+.callout[data-callout="source"] {
+  --callout-color: 59, 130, 246;
+  --callout-icon: lucide-pen-line;
+}
+
+.callout[data-callout="question"] {
+  --callout-color: 217, 119, 6;
+  --callout-icon: lucide-scan-text;
+}
+
+.callout[data-callout="ai"] {
+  --callout-color: 139, 92, 246;
+  --callout-icon: lucide-sparkles;
+}
+
+/* source links (obsidian://uninotes-open) */
+a[href^="obsidian://uninotes-open"]::before {
+  content: "↗ ";
+  opacity: 0.6;
+}
+
+/* ---- plugin UI ------------------------------------------------------------------------------ */
+
+.uninotes-status.mod-clickable {
+  cursor: pointer;
+}
+
+.uninotes-muted {
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+}
+
+.uninotes-command-input {
+  width: 100%;
+  min-height: 6em;
+  resize: vertical;
+  font-family: inherit;
+}
+
+.uninotes-report {
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  padding: var(--size-4-2) var(--size-4-3);
+  margin-bottom: var(--size-4-2);
+}
+
+.uninotes-report .setting-item {
+  border-top: none;
+  padding: var(--size-4-1) 0 0;
+}
+
+.uninotes-report-body {
+  margin: var(--size-4-1) 0 0;
+  white-space: pre-wrap;
+  user-select: text;
+}
+
+.uninotes-badge {
+  display: inline-block;
+  padding: 0 var(--size-4-2);
+  border-radius: var(--radius-s);
+  background: var(--background-modifier-hover);
+  font-size: var(--font-ui-smaller);
+  font-weight: var(--font-semibold);
+}
+
+.uninotes-footer {
+  margin-top: var(--size-4-3);
+  text-align: right;
+  font-size: var(--font-ui-small);
+}
