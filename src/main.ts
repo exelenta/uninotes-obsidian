@@ -204,9 +204,15 @@ export default class UniNotesPlugin extends Plugin {
       const s = (await this.api.sessions(1)).sessions[0];
       if (s && (s.status === "queued" || s.status === "running")) active = s.stage ? `처리 중 · ${s.stage}` : statusLabel(s.status);
     } catch (e) {
-      if (!(e instanceof ApiError && e.notImplemented)) throw e;
-      const j = await this.api.latestJob();
-      if (j && (j.status === "queued" || j.status === "running")) active = statusLabel(j.status);
+      if (isOffline(e)) throw e;
+      // /api/sessions not implemented (or failing) on this server: v0.3 latest job
+      try {
+        const j = await this.api.latestJob();
+        if (j && (j.status === "queued" || j.status === "running")) active = statusLabel(j.status);
+      } catch (e2) {
+        if (isOffline(e2)) throw e2;
+        console.warn("UniNotes: processing status unavailable", e, e2);
+      }
     }
     this.processing = active;
     // a session just finished: its results are on the server now
