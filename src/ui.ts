@@ -36,6 +36,29 @@ export function confirmDialog(app: App, title: string, body: string, ok = "확�
   });
 }
 
+/** A dialog with a few choices; resolves with the chosen value, or null when closed without one. */
+export function choiceDialog(app: App, title: string, body: string,
+                             choices: { value: string; label: string; warning?: boolean }[]): Promise<string | null> {
+  return new Promise((resolve) => {
+    const m = new Modal(app);
+    let answer: string | null = null;
+    m.titleEl.setText(title);
+    m.contentEl.createEl("p", { text: body, cls: "uninotes-pre" });
+    const row = new Setting(m.contentEl).addButton((b) => b.setButtonText("닫기").onClick(() => m.close()));
+    for (const c of choices) {
+      row.addButton((b) => {
+        b.setButtonText(c.label).onClick(() => {
+          answer = c.value;
+          m.close();
+        });
+        if (c.warning) b.setWarning();
+      });
+    }
+    m.onClose = () => resolve(answer);
+    m.open();
+  });
+}
+
 function undoSummary(r: S["UndoResult"]): string {
   let msg = `UniNotes: ${r.reverted}개 변경을 되돌렸습니다`;
   if (r.conflicts && r.conflicts.length > 0) {
@@ -128,10 +151,20 @@ export class CommandModal extends Modal {
     try {
       let cmd = await this.api.createCommand(req);
       if (cmd.status === "needs_confirmation") {
+        const first = cmd;
         const n = cmd.page_cost_estimate ?? 0;
-        const ok = await confirmDialog(this.app, "처리 확인", `이 명령은 약 ${n}장을 차감합니다. 진행할까요?`, `${n}장 차감하고 진행`);
+        const ok = await confirmDialog(this.app, "처리 확인",
+          `이 명령은 문서 전체 약 ${n}쪽을 읽고 처리합니다. 쪽수만큼 사용 금액이 늘 수 있습니다. 진행할까요?`, "진행");
+        if (ok) cmd = await this.api.createCommand({ ...req, confirm_pages: n });
+        // the unconfirmed request is not left waiting (declined, or replaced by the confirmed one)
+        if (!ok || cmd.id !== first.id) {
+          try {
+            await this.api.cancelCommand(first.id);
+          } catch (e) {
+            console.warn("UniNotes: could not cancel the unconfirmed command", e);
+          }
+        }
         if (!ok) return;
-        cmd = await this.api.createCommand({ ...req, confirm_pages: n });
       }
       new Notice(`UniNotes: 명령 접수됨 (${statusLabel(cmd.status)})`);
       this.close();

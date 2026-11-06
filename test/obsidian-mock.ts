@@ -1,5 +1,15 @@
 (globalThis as any).window ??= globalThis;
 
+// window.localStorage (one per process, like one Obsidian install shared by its vaults)
+if (typeof (globalThis as any).localStorage === "undefined") {
+  const m = new Map<string, string>();
+  (globalThis as any).localStorage = {
+    getItem: (k: string) => (m.has(k) ? m.get(k)! : null),
+    setItem: (k: string, v: string) => void m.set(k, String(v)),
+    removeItem: (k: string) => void m.delete(k),
+  };
+}
+
 // Minimal in-memory stand-in for the parts of the Obsidian API the sync engine uses (e2e test only).
 
 type Listener = (...a: any[]) => void;
@@ -33,9 +43,28 @@ export class TFolder extends TAbstractFile {
   }
 }
 
+/** The non-vault files of a device (.obsidian/...): DataAdapter subset. */
+export class Adapter {
+  files = new Map<string, string>();
+  async exists(p: string) {
+    return this.files.has(p);
+  }
+  async read(p: string) {
+    if (!this.files.has(p)) throw new Error("ENOENT " + p);
+    return this.files.get(p)!;
+  }
+  async write(p: string, data: string) {
+    this.files.set(p, data);
+  }
+}
+
 export class Vault {
   files = new Map<string, ArrayBuffer>();
   folders = new Set<string>();
+  adapter = new Adapter();
+  configDir = ".obsidian";
+  /** test hook: paths this "OS" refuses to write (e.g. names iOS or Windows reject) */
+  reject?: (path: string) => boolean;
   private listeners: Record<string, Listener[]> = {};
 
   on(ev: string, fn: Listener) {
@@ -62,10 +91,12 @@ export class Vault {
     return d.slice(0);
   }
   async modifyBinary(f: TFile, data: ArrayBuffer) {
+    if (this.reject?.(f.path)) throw new Error("EINVAL: cannot write " + f.path);
     this.files.set(f.path, data.slice(0));
     this.emit("modify", f);
   }
   async createBinary(p: string, data: ArrayBuffer) {
+    if (this.reject?.(p)) throw new Error("EINVAL: cannot create " + p);
     if (this.files.has(p)) throw new Error("exists " + p);
     this.files.set(p, data.slice(0));
     const f = new TFile(this, p);
@@ -95,25 +126,50 @@ export class Vault {
     this.files.delete(p);
     this.emit("delete", new TFile(this, p));
   }
-  rename(f: TFile, to: string) {
+  async rename(f: TFile, to: string) {
     const d = this.files.get(f.path)!;
     this.files.delete(f.path);
     this.files.set(to, d);
     this.emit("rename", new TFile(this, to), f.path);
   }
+  /** test helper: the user moves or renames a folder (events for every file and the folder, like Obsidian) */
+  moveFolder(from: string, to: string) {
+    const pre = from + "/";
+    for (const p of [...this.files.keys()].filter((x) => x.startsWith(pre))) {
+      const np = to + "/" + p.slice(pre.length);
+      this.files.set(np, this.files.get(p)!);
+      this.files.delete(p);
+      this.emit("rename", new TFile(this, np), p);
+    }
+    for (const f of [...this.folders].filter((x) => x === from || x.startsWith(pre))) {
+      this.folders.delete(f);
+      this.folders.add(to + f.slice(from.length));
+    }
+    const parts = to.split("/");
+    for (let i = 1; i < parts.length; i++) this.folders.add(parts.slice(0, i).join("/"));
+    this.emit("rename", new TFolder(this, to), from);
+  }
 }
 
+let apps = 0;
+
 export class App {
+  appId = `test-app-${++apps}`;
   vault = new Vault();
+  /** fileManager.renameFile rewrites links all over the vault: the engine must not use it (audit M20) */
+  renameFileCalls: string[] = [];
   fileManager = {
     trashFile: async (f: TAbstractFile) => this.vault.remove(f.path),
-    renameFile: async (f: TFile, to: string) => this.vault.rename(f, to),
+    renameFile: async (f: TFile, to: string) => {
+      this.renameFileCalls.push(to);
+      await this.vault.rename(f, to);
+    },
   };
 }
 
 export class Notice {
   static log: string[] = [];
-  constructor(msg: string) {
+  constructor(msg: string, _timeout?: number) {
     Notice.log.push(msg);
   }
 }
@@ -131,7 +187,15 @@ export interface RequestUrlResponse {
 }
 
 export async function requestUrl(r: { url: string; method?: string; headers?: Record<string, string>; body?: string | ArrayBuffer }): Promise<RequestUrlResponse> {
-  const res = await fetch(r.url, { method: r.method, headers: r.headers, body: r.body as any });
+  const go = () => fetch(r.url, { method: r.method, headers: r.headers, body: r.body as any });
+  let res: Response;
+  try {
+    res = await go();
+  } catch (e: any) {
+    // a kept-alive socket the server closed while the test waited on a slow helper: send again once
+    if (e?.cause?.code !== "ECONNRESET") throw e;
+    res = await go();
+  }
   const buf = await res.arrayBuffer();
   const text = new TextDecoder().decode(buf);
   let json: any;

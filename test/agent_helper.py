@@ -4,6 +4,7 @@
   python agent_helper.py write <uid> <path>      (content on stdin, utf-8)
   python agent_helper.py delete <uid> <path>
   python agent_helper.py count <uid>             -> number of vault_changes rows
+  python agent_helper.py bulk <uid> <prefix> <n> (n agent files <prefix>/<i>.md, one process)
 """
 
 from __future__ import annotations
@@ -39,6 +40,15 @@ def main() -> None:
         (vault_dir(uid) / rel).unlink()
         with db.session_scope() as s:
             s.add(db.VaultChange(user_id=uid, path=rel, op="delete", sha256=None, source="agent"))
+    elif cmd == "bulk":
+        uid, prefix, n = sys.argv[2], sys.argv[3], int(sys.argv[4])
+        with db.session_scope() as s:
+            for i in range(n):
+                rel, data = f"{prefix}/{i}.md", f"filler {i}\n".encode()
+                p = vault_dir(uid) / rel
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_bytes(data)
+                s.add(db.VaultChange(user_id=uid, path=rel, op="put", sha256=sha256_bytes(data), source="agent"))
     elif cmd == "count":
         from sqlalchemy import func, select
 

@@ -77,3 +77,7 @@ a[href^="obsidian://uninotes-open"]::before {
   text-align: right;
   font-size: var(--font-ui-small);
 }
+
+.uninotes-pre {
+  white-space: pre-wrap;
+}

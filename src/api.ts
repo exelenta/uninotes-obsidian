@@ -20,8 +20,16 @@ export interface ApiConfig {
   deviceId: string;
 }
 
+/** The request never got an answer (offline, DNS, TLS, server unreachable). */
+export class NetworkError extends Error {
+  constructor(public cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause));
+  }
+}
+
+/** True for network failures only: an error of this device (e.g. a file it cannot write) is not "offline". */
 export function isOffline(e: unknown): boolean {
-  return !(e instanceof ApiError);
+  return e instanceof NetworkError;
 }
 
 export function errorText(e: unknown): string {
@@ -30,7 +38,8 @@ export function errorText(e: unknown): string {
     if (e.notImplemented) return "서버가 아직 이 기능을 지원하지 않습니다";
     return e.message;
   }
-  return "서버에 연결할 수 없습니다";
+  if (isOffline(e)) return "서버에 연결할 수 없습니다";
+  return e instanceof Error ? e.message : String(e);
 }
 
 export class Api {
@@ -51,7 +60,12 @@ export class Api {
     } else if (opts.body !== undefined) {
       headers["Content-Type"] = "application/octet-stream";
     }
-    const res = await requestUrl({ url: this.base + path, method, headers, body, throw: false });
+    let res: RequestUrlResponse;
+    try {
+      res = await requestUrl({ url: this.base + path, method, headers, body, throw: false });
+    } catch (e) {
+      throw new NetworkError(e);
+    }
     if (res.status >= 400) {
       let detail: unknown = undefined;
       try {
@@ -82,6 +96,9 @@ export class Api {
   }
   setPrimary(id: string) {
     return this.post<S["DeviceList"]>(`/api/devices/${encodeURIComponent(id)}/primary`);
+  }
+  async revokeDevice(id: string): Promise<void> {
+    await this.request("DELETE", `/api/devices/${encodeURIComponent(id)}`);
   }
   syncState() {
     return this.get<S["SyncState"]>("/api/sync/state");
@@ -114,6 +131,9 @@ export class Api {
   // ---- commands, reports, undo (session A2) ----
   createCommand(req: S["CommandCreate"]) {
     return this.post<S["CommandOut"]>("/api/commands", req);
+  }
+  cancelCommand(id: string) {
+    return this.post<S["CommandOut"]>(`/api/commands/${encodeURIComponent(id)}/cancel`);
   }
   sessions(limit = 10) {
     return this.get<S["SessionList"]>(`/api/sessions?limit=${limit}`);
